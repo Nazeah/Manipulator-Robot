@@ -1,0 +1,463 @@
+%% Main Code
+
+clear all;
+close all;
+clc;
+
+global motor_grip;
+global motor_hand;
+global motor_base; 
+global pushButton_UP;
+global pushButton_Base;
+global Ultrasonic;
+global UP_Reading;
+global Base_Reading;
+global robottree;
+global rotation_base;
+global rotation_up;
+global a;
+global b;
+global c;
+
+robottree = rigidBodyTree('DataFormat','column','MaxNumBodies',5);   %% Defining our robot using Tree method which is a Matlab function used to simulate the robot into matlab by defining the Joint types and positions. 
+
+L0 = 0.05; L1 = 0.05; L2 = 0.095; L3 = 0.185; L4 = 0.110; 
+
+body = rigidBody('link0');     %% Defining our first joint as FIXED and its position at [0,0,0]
+joint = rigidBodyJoint('joint0', 'fixed');
+setFixedTransform(joint,trvec2tform([0 0 0]));
+body.Joint = joint;
+addBody(robottree, body, 'base');
+
+body = rigidBody('link1');     %% Defining our Second joint as revolute and its position at [0,0,L0] from the previous joint
+joint = rigidBodyJoint('joint1','revolute');
+setFixedTransform(joint, trvec2tform([0,0,L0]));
+joint.JointAxis = [0 0 1];
+body.Joint = joint;
+addBody(robottree, body, 'link0');
+
+body = rigidBody('link2');
+joint = rigidBodyJoint('joint2','fixed');
+setFixedTransform(joint, trvec2tform([0,0,L1]));
+body.Joint = joint;
+addBody(robottree, body, 'link1');
+
+body = rigidBody('link3');
+joint = rigidBodyJoint('joint3','revolute');    
+setFixedTransform(joint, trvec2tform([-L2*cosd(45), 0, L2*sind(45)]));
+joint.JointAxis = [0 1 0];  
+body.Joint = joint;
+addBody(robottree, body, 'link2');
+
+body = rigidBody('link4');
+joint = rigidBodyJoint('joint4','fixed');
+setFixedTransform(joint, trvec2tform([L3*cosd(30), 0, L3*sind(30)]));
+body.Joint = joint;
+addBody(robottree, body, 'link3');
+
+body = rigidBody('end-effector');   %% Defining our end effector position at [0,0,-L4] from the previous joint
+joint = rigidBodyJoint('joint5','fixed');
+setFixedTransform(joint, trvec2tform([0, 0, -L4]));
+body.Joint = joint;
+addBody(robottree, body, 'link4');
+
+Initial_position = [0;0];
+show(robottree,Initial_position);
+
+%% Declaration and Initialization
+
+robot = legoev3('usb');
+motor_grip = motor(robot,'A') ;            %% gripper motor
+motor_hand = motor(robot,'B')  ;           %% up and down motor
+motor_base = motor(robot,'C') ;            %% Base motor
+pushButton_UP = touchSensor(robot,3)  ;    %% upper pushbutton
+pushButton_Base = touchSensor(robot,1);    %% Base pushbutton
+Ultrasonic = sonicSensor(robot,2)  ;       %% UltraSonic Sensor
+UP_Reading = readTouch(pushButton_UP)  ;   %% Upper push button state
+Base_Reading = readTouch(pushButton_Base); %% Lower push button state
+
+resetRotation(motor_hand); %% Reset the encoders of the motors
+resetRotation(motor_base);
+
+rotation_base = abs(readRotation(motor_base)); 
+rotation_up = abs(readRotation(motor_hand));
+
+%% home position
+
+motor_grip.Speed = 5;  %% close the grip
+pause(1);
+motor_grip.Speed = 0;
+
+motor_grip.Speed = -5; %% open the grip
+pause(0.5)
+motor_grip.Speed = 0;
+
+homeing();  %% Calling our homeing function.
+
+[a , b , c] = measuring(); %% Calling our measuring function.
+
+
+
+
+%% Tasks
+
+homeing()
+
+%%5
+task = 5
+picking('B');   %% Calling our picking function from position B.
+placing('C');   %% Calling our placing function at position C.
+homeing();      %% Calling our homeing function.
+
+%%6
+task = 6
+picking('C');
+placing('A');
+homeing();
+
+%%7
+task = 7
+picking('A');
+placing('B');
+homeing();
+
+%%8
+task = 8
+picking('B');
+placing('A');
+homeing();
+
+%%9
+task = 9
+picking('A');
+placing('C');
+homeing();
+
+%%10
+task = 10
+picking('C');
+placing('B');
+homeing();
+
+
+%%%%% Here you will find the functions codes %%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%{
+This function is used to move the motor to the home position
+by moving the arm up until it touchs the upper touch sensor and rotating
+the base until it touchs the lower touch sensor
+%}
+
+function homeing()
+
+global motor_hand
+global motor_base 
+global pushButton_UP
+global pushButton_Base
+global Ultrasonic
+global UP_Reading
+global Base_Reading
+global rotation_base
+
+UP_Reading = readTouch(pushButton_UP);   %% moving our hand up to its home position
+start(motor_hand);  
+while UP_Reading ~= 1  %% hand home position
+  motor_hand.Speed = -25;
+  UP_Reading = readTouch(pushButton_UP); 
+end
+
+motor_hand.Speed = 0;
+resetRotation(motor_hand);
+
+
+Base_Reading = readTouch(pushButton_Base); %% rotating our base clockwise to its home position
+start(motor_base);
+while Base_Reading ~= 1 %% base home position
+  motor_base.Speed = 25;
+  Base_Reading = readTouch(pushButton_Base);
+end
+
+motor_base.Speed = 0;
+resetRotation(motor_base);
+rotation_base = 0;
+pause(1);
+
+end
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%{
+This function is used to measure the hights of our 3 positions using
+ultrasonic sensor and apply the inverse kinematics using these hieghts
+to get the value of theta_2 which is the angle requiered by the arm 
+to reach the object.
+%}
+
+function [a , b , c] = measuring()   %% We have 3 outputs from this function which are the angels  for each position (a,b,c)
+
+global motor_grip 
+global motor_hand
+global motor_base 
+global pushButton_UP
+global pushButton_Base
+global Ultrasonic
+global UP_Reading
+global Base_Reading
+global rotation_base
+global rotation_up
+global a
+global b
+global c
+
+distance = readDistance(Ultrasonic);  %% get the distance between the end-effector and the object using the ultrasonic sensor at position A.
+z = 0.21 - distance;  %% subtracting the distance from the actual ground to end-effector hight to get the actual hight of our object
+a = inverse(z)  %% Calling our inverse function.
+
+
+resetRotation(motor_base);
+rotation_base = abs(readRotation(motor_base));
+motor_base.Speed = -25;
+
+while rotation_base <= 100*3  %% Rotate the robot to position B to apply the same procedure again. (we multiplied by 3 which is the gear ratio)
+rotation_base = abs(readRotation(motor_base));
+end
+motor_base.Speed = 0;
+pause(3);
+distance = readDistance(Ultrasonic);
+z = 0.21 - distance;
+b = inverse(z)
+
+
+rotation_base = abs(readRotation(motor_base)); 
+motor_base.Speed = -25;
+
+while rotation_base <= 190*3  %% Rotate the robot to position B to apply the same procedure again. 
+rotation_base = abs(readRotation(motor_base));
+end
+motor_base.Speed = 0;
+pause(3);
+
+distance = readDistance(Ultrasonic);
+z = 0.21 - distance;
+c = inverse(z)
+
+end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%{
+This function is used to perform the inverse kinematics using the
+inverseKinematics method which is a matlab built in function require the
+tree model of our robot.
+%}
+
+function theta_2 =  inverse(z)
+
+global robottree;
+
+points = [ 0, 0, 0 ];
+points(1,3) = z;
+
+Initial_position = [0; 0];
+
+qs = zeros(1, 2);
+ik = inverseKinematics('RigidBodyTree', robottree);
+weights = [0, 0, 0, 1, 1, 1];
+
+    desired_position = trvec2tform(points);
+    configSol = ik('end-effector',desired_position,weights,Initial_position);
+    theta_2 = floor(rad2deg(configSol(2,1)));
+
+end
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%{
+This function is used to recieve the desired position and pick the ball
+from it.
+%}
+
+function picking(position)
+
+global motor_grip 
+global motor_hand
+global motor_base 
+global pushButton_UP
+global pushButton_Base
+global Ultrasonic
+global UP_Reading
+global Base_Reading
+global rotation_base
+global rotation_up
+global a
+global b
+global c
+
+if position == 'A'  %% Assigning the angles values depending on the given position.
+    theta_1 = 0;
+    theta_2 = a;
+end
+
+if position == 'B'
+    theta_1 = 300;
+    theta_2 = b;
+end
+
+if position == 'C'
+    theta_1 = 570;
+    theta_2 = c;
+end
+
+
+difference = theta_1 - rotation_base;   % We calculate the difference between the new desired position and the current position 
+                                        % to decide in which direction should we rotate
+if difference > 0 
+    speed = -25;
+end
+
+if difference < 0 
+    speed = 25;
+else 
+    speed = -25;
+end
+
+    
+    
+resetRotation(motor_base);
+rotation_base = abs(readRotation(motor_base));
+motor_base.Speed = speed;
+
+while rotation_base <= abs(difference) %% Rotate the base motor to the desired posstion.
+rotation_base = abs(readRotation(motor_base));
+end
+rotation_base = theta_1;
+motor_base.Speed = 0;
+pause(1);
+
+
+
+start(motor_hand);
+resetRotation(motor_hand);   
+rotation_up  = abs(readRotation(motor_hand));
+motor_hand.Speed = 25;
+
+while rotation_up <= (theta_2)*5 %%  move the robot hand to the desired position (we multiplied by 5 which is the gear ratio)
+rotation_up = abs(readRotation(motor_hand));
+end
+motor_hand.Speed = 0;
+
+motor_grip.Speed = 5;  %% close the grip
+pause(1);
+motor_grip.Speed = 0;
+
+UP_Reading = readTouch(pushButton_UP);
+Base_Reading = readTouch(pushButton_Base);
+
+while UP_Reading ~= 1  %% hand home position
+  motor_hand.Speed = -25;
+  UP_Reading = readTouch(pushButton_UP); 
+end
+motor_hand.Speed = 0;
+resetRotation(motor_hand);
+
+end
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%  
+
+%{
+This function is used to recieve the desired position and place the ball
+on it.
+%}
+
+
+function placing(position)
+
+global motor_grip 
+global motor_hand
+global motor_base 
+global pushButton_UP
+global pushButton_Base
+global Ultrasonic
+global UP_Reading
+global Base_Reading
+global rotation_base
+global rotation_up
+global a
+global b
+global c
+
+
+
+if position == 'A'
+    theta_1 = 0;
+    theta_2 = a;
+end
+
+if position == 'B'
+    theta_1 = 300;
+    theta_2 = b;
+end
+
+if position == 'C'
+    theta_1 = 570;
+    theta_2 = c;
+end
+
+
+difference = theta_1 - rotation_base;
+
+if difference > 0 
+    speed = -25;
+end
+
+if difference < 0 
+    speed = 25;
+else 
+    speed = -25;
+end
+
+
+resetRotation(motor_base);
+rotation_base = abs(readRotation(motor_base));
+motor_base.Speed = speed;
+
+while rotation_base <= abs(difference)
+rotation_base = abs(readRotation(motor_base));
+end
+rotation_base = theta_1;
+motor_base.Speed = 0;
+pause(1);
+
+
+start(motor_hand);
+resetRotation(motor_hand);
+rotation_up  = abs(readRotation(motor_hand));
+motor_hand.Speed = 25;
+
+while rotation_up <= (theta_2)*5 
+rotation_up = abs(readRotation(motor_hand));
+end
+motor_hand.Speed = 0;
+
+motor_grip.Speed = -5;  %% open the grip
+pause(0.5);
+motor_grip.Speed = 0;
+
+UP_Reading = readTouch(pushButton_UP);
+Base_Reading = readTouch(pushButton_Base);
+
+while UP_Reading ~= 1  %% hand home position
+  motor_hand.Speed = -25;
+  UP_Reading = readTouch(pushButton_UP); 
+end
+motor_hand.Speed = 0;
+resetRotation(motor_hand);
+
+end
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+
